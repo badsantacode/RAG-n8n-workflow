@@ -1,0 +1,40 @@
+DELETE collections/RagDocuments
+
+PUT collections/RagDocuments
+{
+  "vectors": {
+    "vectors": {
+      "size": 1024,
+      "distance": "Cosine"
+    }
+  },
+  "sparse_vectors": {
+    "sparse-vectors": {
+      "modifier": "idf"
+    }
+  }
+}
+
+GET collections/RagDocuments
+
+POST collections/RagDocuments/points/scroll
+{
+  "limit": 300
+}
+
+//поиск по тексту
+POST collections/RagDocuments/points/scroll
+{
+  "limit": 10,
+  "filter": {
+    "must": [
+      {
+        "key": "pageContent",
+        "match": {
+          "text": "По коду склада фильтруются записи в таблице"
+        }
+      }
+    ]
+  },
+  "with_payload": true
+}
