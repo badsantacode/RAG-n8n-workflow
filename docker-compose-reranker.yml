@@ -1,0 +1,15 @@
+services:
+  infinity:
+    image: michaelf34/infinity:latest
+    container_name: infinity
+    restart: always
+    ports:
+      - "8003:7997"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: v2 --model-id BAAI/bge-reranker-v2-m3 --port 7997 --host 0.0.0.0 --engine torch --device cuda
