@@ -98,7 +98,7 @@ This pipeline is triggered by user input through a **Chat Trigger** (webhook).
 1. **Clone the repository:**
    ```bash
    git clone https://github.com/badsantacode/RAG-n8n-workflow.git
-   cd RAG-n8n
+   cd RAG-n8n-workflow
    ```
 
 2. **Import the workflow**  
