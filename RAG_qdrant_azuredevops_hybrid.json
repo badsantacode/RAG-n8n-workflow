@@ -1,0 +1,989 @@
+{
+  "name": "RAG_qdrant_hybrid_Hapaniuk_v4",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Get n results').item.json.mergedText }}",
+        "options": {
+          "systemMessage": "={{ $json.Prompt }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        -1024,
+        352
+      ],
+      "id": "0a9f5242-375a-4896-9e4f-ad3e708c8852",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Chat').first().json.sessionId }}",
+        "tableName": "RagChatMemory"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        -928,
+        544
+      ],
+      "id": "327c5063-2ec5-4e0c-bbb4-074488b62d23",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "fjLKQdRjmddOeL97",
+          "name": "DocumentVector"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const documents = $input.all();\nconst query = $(\"Chat\").first().json.chatInput || \"\";\n\n// Фильтруем исходные элементы, чтобы сохранить связь между индексом текста и полным объектом документа\n// АДАПТАЦИЯ: данные теперь приходят в payload, а не в document\nconst validDocuments = documents.filter(d => {\n  const text = d.json.payload?.pageContent;\n  return typeof text === 'string' && text.trim().length > 0;\n});\n\nconst pageContents = validDocuments.map(d => d.json.payload.pageContent);\n\ntry {\n  const response = await helpers.httpRequest({\n    method: 'POST',\n    url: 'http://10.1.222.23:8003/rerank',\n    timeout: 60000,  // 30 секунд на случай большой нагрузки\n    body: {\n      model: \"BAAI/bge-reranker-v2-m3\",\n      query: query,\n      documents: pageContents\n    }\n  });\n\n  // 1. Сортируем и берем ТОП-1 результат\n  const topResults = response.results\n    .sort((a, b) => b.relevance_score - a.relevance_score)\n    .slice(0, 1);\n\n  // Если после фильтрации ничего не нашли — возвращаем заглушку\n  if (topResults.length === 0) {\n    return [{ \n      json: { \n        document: {\n          pageContent: \"Ничего не найдено по вашему запросу.\", \n          metadata: { filename: \"пусто\" }\n        },\n        relevance_score: 0, \n        status: \"empty\" \n      } \n    }];\n  }\n\n  // ================================================================\n  //  Отсечение по порогу релевантности\n  // (дабы убрать вопросы типа \"В чем смысл жизни?\") ================================================================\n  // Порог релевантности (экспериментальное значение, можно менять)\n  // Рекомендуемый диапазон: 0.3 - 0.7\n  // - 0.3: более либеральный (пропускает больше документов, но может быть шум)\n  // - 0.5: сбалансированный (рекомендуется для начала)\n  // - 0.7: строгий (только очень релевантные документы)\n  const RELEVANCE_THRESHOLD = 0.5;\n  \n  // Проверяем, превышает ли топ-1 результат порог\n  const topScore = topResults[0]?.relevance_score || 0;\n  \n  if (topScore < RELEVANCE_THRESHOLD) {\n    // Если самый релевантный документ ниже порога - возвращаем специальный статус\n    return [{\n      json: {\n        document: {\n          pageContent: \"NO_RELEVANT_INFO\", // Специальный маркер для промпта\n          metadata: { \n            filename: \"не_найдено\",\n            // Сохраняем фактический score для анализа\n            relevance_score_actual: topScore,\n            threshold_used: RELEVANCE_THRESHOLD\n          }\n        },\n        relevance_score: topScore,\n        status: \"no_results\" // Специальный статус для обработки в промпте\n      }\n    }];\n  }\n  \n  // 2. Сопоставляем индексы реранкера с исходными документами (текст + метаданные)\n  const finalOutput = topResults.map(res => {\n    // АДАПТАЦИЯ: берем данные из payload\n    const originalPayload = validDocuments[res.index].json.payload || {};\n\n    return {\n      json: {\n        document: {\n          pageContent: originalPayload.pageContent,\n          metadata: originalPayload.metadata || {} // Сохраняем исходные метаданные (путь, имя файла)\n        },\n        relevance_score: res.relevance_score,\n        status: \"success\"\n      }\n    };\n  });\n\n  return finalOutput;\n\n} catch (error) {\n  return [{ \n    json: { \n      document: {\n        pageContent: `Ошибка сервиса реранкинга: ${error.message}`, \n        metadata: { filename: \"ошибка\" }\n      },\n      relevance_score: 0,\n      status: \"error\" \n    } \n  }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1696,
+        352
+      ],
+      "id": "51184159-a487-432d-bbb4-0a163721f4da",
+      "name": "Use Reranker",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "Добрый день! Что Вас интересует?",
+        "options": {
+          "subtitle": "Здесь вы можете задать любой вопрос по бизнес-процессам компании",
+          "title": "База знаний компании",
+          "responseMode": "lastNode"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -2256,
+        352
+      ],
+      "id": "21b6a64f-22fa-4a7d-939b-b9cb9f1a98c3",
+      "name": "Chat",
+      "webhookId": "812b5787-5f65-41b5-84da-e2f2e5f35f47",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "mergeByFields": {
+          "values": []
+        },
+        "resolve": "preferInput2",
+        "fuzzyCompare": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.compareDatasets",
+      "typeVersion": 2.3,
+      "position": [
+        -1520,
+        880
+      ],
+      "id": "1b7fe26f-09c5-400d-8329-e9031d5e1f27",
+      "name": "Compare Files"
+    },
+    {
+      "parameters": {
+        "chunkSize": 2000,
+        "chunkOverlap": 200,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        1424
+      ],
+      "id": "85358e48-b06b-4468-a3d9-6e0f2d8e4359",
+      "name": "Recursive Character Text Splitter"
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "=payload.metadata.path, payload.metadata.UpdDocument",
+        "options": {
+          "removeOtherFields": true
+        }
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        -1952,
+        832
+      ],
+      "id": "4c8966c0-8dd1-44ab-8be8-8af5752ce50f",
+      "name": "Remove Duplicates"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1232,
+        928
+      ],
+      "id": "0f41eb2c-69b7-42ba-812a-25c6bdccd269",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -2592,
+        912
+      ],
+      "id": "9492d852-2564-4aaa-938b-f9dd1db88e01",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "30e13e24-114f-4744-b9bd-b2232fb52413",
+              "name": "data",
+              "value": "={{ $json.content.replace(/!\\[image\\.png\\]\\([^)]*\\)/g, \"\") }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -432,
+        944
+      ],
+      "id": "fe85a75e-92a5-4ccf-b1c7-9e846fe91534",
+      "name": "Data preparation"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "result.points",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -2144,
+        832
+      ],
+      "id": "90717d02-b32e-40ab-ae13-927c2ce18c1c",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "resource": "point",
+        "operation": "scrollPoints",
+        "collectionName": {
+          "__rl": true,
+          "value": "RagDocuments",
+          "mode": "list",
+          "cachedResultName": "RagDocuments"
+        },
+        "limit": 5000,
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-qdrant.qdrant",
+      "typeVersion": 1,
+      "position": [
+        -2336,
+        832
+      ],
+      "id": "0908b879-2246-42ca-942d-f70630438fb7",
+      "name": "Get all docs",
+      "credentials": {
+        "qdrantRestApi": {
+          "id": "Rz2iK6KQD1TX6132",
+          "name": "Qdrant account prod-mod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "20a9467a-8573-4418-b347-636dd122597e",
+              "name": "path",
+              "value": "={{ $json.payload.metadata.path }}",
+              "type": "string"
+            },
+            {
+              "id": "ade66521-60f2-4e74-82d1-aab85a59fddb",
+              "name": "lastModified",
+              "value": "={{ $json.payload.metadata.UpdDocument }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1760,
+        832
+      ],
+      "id": "a4dac5e5-1b70-422a-a4fd-4499eb72d008",
+      "name": "prepare list (1)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "10beb331-3052-4628-bdb3-7d84bafe328c",
+              "name": "Prompt",
+              "value": "=Ты — ведущий инженер поддержки. Твоя роль — помогать сотрудникам формировать ответы на запросы. Используй только те данные, которые получил, не придумывай ничего от себя.\n\nИз базы данных документов ты получаешь готовые ответы на вопрос.\n\n[Вопрос] \"{{ $('Chat').first().json.chatInput }}\"\n\nОпиши по пунктам инструкцию для пользователя, используя только информацию из полученного документа.\n\nВажное правило:\n- НЕ добавляй никаких URL, гиперссылок, доменов (example.com, http, https) или выдуманных путей.\n- НЕ пиши слова \"Ссылки на файл:\", \"Пример:\", \"Смотри также\".\n- В конце ответа ОБЯЗАТЕЛЬНО выведи блок с источниками данных. Этот блок должен быть последней строкой в твоём ответе. Не пропускай его. Не заменяй его на другой текст. Выведи его точно в таком виде:\n\n* Источники данных: \"{{ $('Use Reranker').item.json.document.metadata.path }}\"\n\nЕсли переменная {{ $('Use Reranker').item.json.document.metadata.path }} пустая или недоступна — выведи строку:\n* Источники данных отсутствуют.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1248,
+        352
+      ],
+      "id": "316a2f54-2b30-4c36-8038-090830996c58",
+      "name": "Prompt",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "value",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -2144,
+        992
+      ],
+      "id": "07f59dff-7322-4766-9479-f70d0f4cb2ac",
+      "name": "Split Out1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fecc39ac-9aa8-4eee-b3ef-19aff41baf69",
+              "leftValue": "={{ $json.path }}",
+              "rightValue": ".md",
+              "operator": {
+                "type": "string",
+                "operation": "endsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -1760,
+        992
+      ],
+      "id": "e5bc03a5-f28d-42df-ada8-d6aa51852379",
+      "name": "Filter1"
+    },
+    {
+      "parameters": {
+        "url": "https://azure.company.by/IT/Sandbox%20-%20General/_apis/git/repositories/Sandbox---General.wiki/items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "scopePath",
+              "value": "/База-Знаний-пользовательской-функциональности"
+            },
+            {
+              "name": "recursionLevel",
+              "value": "full"
+            },
+            {
+              "name": "versionDescriptor.version",
+              "value": "wikiMaster"
+            },
+            {
+              "name": "api-version",
+              "value": "7.0"
+            },
+            {
+              "name": "latestProcessedChange",
+              "value": "true"
+            },
+            {
+              "name": "versionDescriptor.versionType",
+              "value": "branch"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2336,
+        992
+      ],
+      "id": "5c765449-1302-43b5-bff8-692e9c788acc",
+      "name": "Azure get list",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "D67NpkI0cjL2nnxZ",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6d8137b0-d742-4063-bdd3-782b8b3e6e2a",
+              "name": "path",
+              "value": "={{ $json.path.replace(/^\\/База-Знаний-пользовательской-функциональности/, '') }}",
+              "type": "string"
+            },
+            {
+              "id": "7bc7e707-26d7-427e-be8b-06f0c9401db6",
+              "name": "lastModified",
+              "value": "={{ $json.latestProcessedChange.committer.date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1952,
+        992
+      ],
+      "id": "6dadc98f-9b7f-480f-9518-69d7c025a624",
+      "name": "prepare list (2)"
+    },
+    {
+      "parameters": {
+        "url": "https://azure.company.com/IT/Sandbox%20-%20General/_apis/git/repositories/Sandbox---General.wiki/items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "Path",
+              "value": "={{ '/База-Знаний-пользовательской-функциональности' + $('Loop Over Items').item.json.path }}"
+            },
+            {
+              "name": "versionDescriptor.version",
+              "value": "wikiMaster"
+            },
+            {
+              "name": "api-version",
+              "value": "7.0"
+            },
+            {
+              "name": "includeContent",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -704,
+        944
+      ],
+      "id": "b12cfcb1-c04c-4aea-a20d-0051dccb7aaf",
+      "name": "Azure get file",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "D67NpkI0cjL2nnxZ",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.1.222.23:6333/collections/RagDocuments/points/delete",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "qdrantApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={   \"filter\": {     \"must\": [       {         \"key\": \"metadata.path\",         \"match\": {           \"value\": \"{{ $json.path }}\"         }       }     ]   } }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -992,
+        944
+      ],
+      "id": "ce0073c5-659a-4e32-be68-90520b6cd654",
+      "name": "Qdrant delete 1 doc",
+      "credentials": {
+        "qdrantApi": {
+          "id": "72cgosUaZ21tkWqa",
+          "name": "Qdrant account prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.1.222.23:6333/collections/RagDocuments/points/delete",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "qdrantApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "=application/json",
+        "body": "={\n  \"filter\": {\n    \"must\": [\n      {\n        \"key\": \"metadata.path\",\n        \"match\": {\n          \"any\": {{ JSON.stringify($input.all().map(item => item.json.path)) }}\n        }\n      }\n    ]\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1232,
+        752
+      ],
+      "id": "1cde81ee-c158-454d-90ab-b994b1ef2c09",
+      "name": "Qdrant delete docs",
+      "credentials": {
+        "qdrantApi": {
+          "id": "72cgosUaZ21tkWqa",
+          "name": "Qdrant account prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "textSplittingMode": "custom",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "UpdDocument",
+                "value": "={{ $('Compare Files').item.json.lastModified }}"
+              },
+              {
+                "name": "path",
+                "value": "={{ $('Loop Over Items').item.json.path }}"
+              }
+            ]
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        -144,
+        1232
+      ],
+      "id": "c4aaa30f-80cf-4c1f-a65e-584e261536dc",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Получаем все элементы от предыдущей ноды\nconst items = $input.all();\n\n// Массив для хранения текстовых блоков каждого документа\nconst formattedDocuments = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  // Проверяем наличие необходимых данных, чтобы избежать ошибок\n  if (data && data.document) {\n    const pageContent = data.document.pageContent || '';\n    \n    // Превращаем объект метаданных в читаемую строку (ключ: значение)\n    const metadataObj = data.document.metadata || {};\n    const metadataStr = Object.entries(metadataObj)\n      .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)\n      .join('\\n');\n    \n    const relevanceScore = `Relevance Score: ${data.relevance_score ?? 'N/A'}`;\n    \n    // Объединяем внутренности одного документа через ОДНУ пустую строку\n    const singleDocText = [pageContent, metadataStr, relevanceScore]\n      .filter(block => block.trim() !== '') // Убираем пустые блоки, если каких-то данных нет\n      .join('\\n\\n');\n    \n    formattedDocuments.push(singleDocText);\n  }\n}\n\n// Объединяем ВСЕ документы через ДВЕ пустые строки\nconst finalMergedText = formattedDocuments.join('\\n\\n\\n');\n\n// Возвращаем результат в виде одного json-объекта\nreturn [{\n  json: {\n    mergedText: finalMergedText,\n    totalDocuments: formattedDocuments.length,\n    status: \"success\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1472,
+        352
+      ],
+      "id": "79ab3642-cab0-4f7e-b823-9c3d60298015",
+      "name": "Get n results"
+    },
+    {
+      "parameters": {
+        "collectionName": {
+          "__rl": true,
+          "value": "RagDocuments",
+          "mode": "list",
+          "cachedResultName": "RagDocuments"
+        },
+        "options": {
+          "contentPayloadKey": "pageContent",
+          "denseVectorName": "vectors",
+          "metadataPayloadKey": "metadata",
+          "sparseVectorName": "sparse-vectors"
+        }
+      },
+      "type": "n8n-nodes-qdrant-hybrid.qdrantHybrid",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        944
+      ],
+      "id": "882efdcd-ed71-4103-9eda-d5a301895f93",
+      "name": "Qdrant Hybrid Vector Store1",
+      "credentials": {
+        "qdrantApi": {
+          "id": "72cgosUaZ21tkWqa",
+          "name": "Qdrant account prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "hybridRetrieve",
+        "collectionName": {
+          "__rl": true,
+          "value": "RagDocuments",
+          "mode": "list",
+          "cachedResultName": "RagDocuments"
+        },
+        "query": "={{ $json.chatInput }}",
+        "resultLimit": 20,
+        "options": {
+          "contentPayloadKey": "pageContent",
+          "densePrefetchLimit": 20,
+          "denseVectorName": "vectors",
+          "withPayload": true,
+          "withVector": false,
+          "metadataPayloadKey": "metadata",
+          "sparsePrefetchLimit": 10,
+          "sparseVectorName": "sparse-vectors"
+        }
+      },
+      "type": "n8n-nodes-qdrant-hybrid.qdrantHybrid",
+      "typeVersion": 2,
+      "position": [
+        -2048,
+        352
+      ],
+      "id": "74407492-0e15-4132-8cd4-2aca0a0c98d5",
+      "name": "Qdrant Hybrid Vector Store2",
+      "credentials": {
+        "qdrantApi": {
+          "id": "72cgosUaZ21tkWqa",
+          "name": "Qdrant account prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen3.8:27b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        544
+      ],
+      "id": "57135d40-dc07-41f6-a928-66356bb10c51",
+      "name": "LLM model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "br6HB2wbukO5DaXj",
+          "name": "Ollama account prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen3-embedding:0.6b"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
+      "position": [
+        -2048,
+        544
+      ],
+      "id": "673cdbcb-69ee-46e3-9793-82997839c46d",
+      "name": "Embeddings model-get",
+      "credentials": {
+        "ollamaApi": {
+          "id": "br6HB2wbukO5DaXj",
+          "name": "Ollama account prod"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "qwen3-embedding:0.6b"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
+      "position": [
+        -384,
+        1216
+      ],
+      "id": "21e01ffe-685f-43f5-bde1-330927f05d90",
+      "name": "Embeddings model-set",
+      "credentials": {
+        "ollamaApi": {
+          "id": "br6HB2wbukO5DaXj",
+          "name": "Ollama account prod"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Reranker": {
+      "main": [
+        [
+          {
+            "node": "Get n results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Hybrid Vector Store2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare Files": {
+      "main": [
+        [
+          {
+            "node": "Qdrant delete docs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [
+          {
+            "node": "prepare list (1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Qdrant delete 1 doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get all docs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Azure get list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data preparation": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Hybrid Vector Store1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all docs": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prepare list (1)": {
+      "main": [
+        [
+          {
+            "node": "Compare Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out1": {
+      "main": [
+        [
+          {
+            "node": "prepare list (2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter1": {
+      "main": [
+        [
+          {
+            "node": "Compare Files",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Azure get list": {
+      "main": [
+        [
+          {
+            "node": "Split Out1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prepare list (2)": {
+      "main": [
+        [
+          {
+            "node": "Filter1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Azure get file": {
+      "main": [
+        [
+          {
+            "node": "Data preparation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant delete 1 doc": {
+      "main": [
+        [
+          {
+            "node": "Azure get file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Qdrant Hybrid Vector Store1",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get n results": {
+      "main": [
+        [
+          {
+            "node": "Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Hybrid Vector Store1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Hybrid Vector Store2": {
+      "main": [
+        [
+          {
+            "node": "Use Reranker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings model-get": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Hybrid Vector Store2",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings model-set": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Hybrid Vector Store1",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "28537a95-8520-4470-8d8d-ceb45567c9b5",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "11d9914e348356d6d77980cf6cf30c08b32698b550ba60cc2e57e211220dbd20"
+  },
+  "nodeGroups": [],
+  "id": "ImmTrikATZR3mLmW",
+  "tags": []
+}
