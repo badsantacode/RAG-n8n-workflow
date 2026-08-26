@@ -1,4 +1,4 @@
-# RAG-n8n: Hybrid Document Retrieval & RAG Workflow with Qdrant, Azure DevOps, and Reranking
+# RAG-n8n: Hybrid Document Retrieval & RAG n8n Workflow with Qdrant, Azure DevOps, and Reranking
 
 [![n8n](https://img.shields.io/badge/n8n-0.237.0-%23EA4B2A)](https://n8n.io/)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.9.0-%234B32C4)](https://qdrant.tech/)
@@ -97,8 +97,8 @@ This pipeline is triggered by user input through a **Chat Trigger** (webhook).
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/badsantacode/RAG-n8n.git
-   cd RAG-n8n
+   git clone https://github.com/badsantacode/RAG-n8n-workflow.git
+   cd RAG-n8n-workflow
    ```
 
 2. **Import the workflow**  
