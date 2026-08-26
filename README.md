@@ -45,7 +45,7 @@ This pipeline is triggered by user input through a **Chat Trigger** (webhook).
    - Uses the same `qwen3-embedding` model to generate query vectors.
    - Performs both dense (semantic) and sparse (keyword) retrieval in parallel.
    - Returns the top 20 candidate documents.
-2. **Reranking with Cross-Encoder** – The **Use Reranker** node sends the top candidates to an external reranker service (running `BAAI/bge-reranker-v2-m3` at `http://10.1.222.23:8003/rerank`). This step:
+2. **Reranking with Cross-Encoder** – The **Use Reranker** node sends the top candidates to an external reranker service (running `BAAI/bge-reranker-v2-m3` at `http://10.1.1.1:8003/rerank`). This step:
    - Re-scores documents based on relevance to the query.
    - Applies a **relevance threshold (0.5)** – documents below this score are flagged as `NO_RELEVANT_INFO`.
    - Returns only the single most relevant document.
