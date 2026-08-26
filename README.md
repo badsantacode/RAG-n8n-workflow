@@ -1,4 +1,4 @@
-# RAG-n8n: Hybrid Document Retrieval & RAG Workflow with Qdrant, Azure DevOps, and Reranking
+# RAG-n8n: Hybrid Document Retrieval & RAG n8n Workflow with Qdrant, Azure DevOps, and Reranking
 
 [![n8n](https://img.shields.io/badge/n8n-0.237.0-%23EA4B2A)](https://n8n.io/)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.9.0-%234B32C4)](https://qdrant.tech/)
